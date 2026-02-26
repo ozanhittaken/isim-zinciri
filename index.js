@@ -1,11 +1,10 @@
-const express = require("express");
+const express = require('express');
 const app = express();
-const http = require("http").createServer(app);
-const io = require("socket.io")(http);
+const http = require('http').createServer(app);
+const io = require('socket.io')(http);
 
-app.use(express.static("public"));
+app.use(express.static('public'));
 
-// GEÇERLİ İSİMLER SÖZLÜĞÜ (Rastgele harf girişini engeller)
 const validNamesArray = [
     "ABBAS", "ABDULAZİZ", "ABDULKADİR", "ABDULLAH", "ABDULMELİK", "ABDULSAMET", "ABDULSELAM", "ABDURRAHMAN", "ABDÜLSAMET", "ADEM", "ADİL", "ADNAN", "AHMAD", "AHMET", "AKIN", "AKSEL", "ALAADDİN", "ALEV", "ALEVTİNA", "ALİ", "ALİŞAN", "ALPER", "ALPEREN", "ANDAÇ", "ANIL", "ARDA", "ARİF", "ARMAN", "ARZU", "ASENA", "ASIM", "ASLI", "ASLIHAN", "ASLAN", "ASUMAN", "ATAKAN", "ATİLLA", "AYBEGÜM", "AYBÜKE", "AYCAN", "AYDEMİR", "AYDIN", "AYDOĞAN", "AYHAN", "AYKAN", "AYKUT", "AYLA", "AYLİA", "AYLİN", "AYSU", "AYSUN", "AYŞE", "AYŞEGÜL", "AYŞEN", "AYŞENUR", "AYTAÇ", "AZİZ",
     "BAHADIR", "BAHRİ", "BAKİ", "BARAN", "BARIŞ", "BAŞAK", "BATUHAN", "BAVER", "BAYRAM", "BEDRİ", "BEDREDDİN", "BEGÜM", "BELGİN", "BELMA", "BENGÜ", "BENGÜHAN", "BERAAT", "BERAY", "BERÇEM", "BERFİN", "BERKER", "BERNA", "BERRİN", "BESTE", "BETÜL", "BEYZA", "BİLAL", "BİLGE", "BİLGİ", "BİLGİN", "BİNNUR", "BİRGÜL", "BİROL", "BİRSEN", "BİŞAR", "BORA", "BUĞRA", "BULUT", "BURAK", "BURCU", "BURÇİN", "BURHAN", "BURHANETTİN", "BÜLENT", "BÜNYAMİN", "BÜŞRA",
@@ -34,150 +33,122 @@ const validNamesArray = [
     "YAHYA", "YAKUP", "YALÇIN", "YASEMİN", "YASER", "YASİN", "YAŞAR", "YAVUZ", "YELDA", "YELİZ", "YENER", "YEŞİM", "YETKİN", "YILDIRAY", "YILDIRIM", "YILDIZ", "YILMAZ", "YİĞİT", "YUNUS", "YURDAGÜL", "YURDUN", "YUSUF", "YÜCE", "YÜCEL", "YÜKSEL",
     "ZAFER", "ZAHİDE", "ZARİFE", "ZEHRA", "ZEKERİYA", "ZEKİ", "ZEKİYE", "ZELİHA", "ZERİN", "ZERRİN", "ZEYNALABİDİN", "ZEYNEP", "ZİYA", "ZUHAL", "ZÜBEYDE", "ZÜHAL", "ZÜHRE", "ZÜHTÜ", "ZÜLFİYE", "ZÜMRÜT"
 ];
-const validNames = new Set(validNamesArray); // Hızlı arama için Set'e çevrildi
+const validNames = new Set(validNamesArray);
 const rooms = {};
 
-io.on("connection", (socket) => {
-  socket.on("joinRoom", (data) => {
-    const { roomCode, username } = data;
-    if (!rooms[roomCode])
-      rooms[roomCode] = {
-        players: [],
-        usedNames: [],
-        currentLetter: "",
-        turn: 0,
-        turnStartTime: 0,
-      };
-    if (rooms[roomCode].players.length >= 2)
-      return socket.emit("errorMsg", "Bu oda dolu!");
+io.on('connection', (socket) => {
+    socket.on('joinRoom', (data) => {
+        const { roomCode, username } = data;
+        if (!rooms[roomCode]) rooms[roomCode] = { players: [], usedNames: [], currentLetter: '', turn: 0, turnStartTime: 0 };
+        if (rooms[roomCode].players.length >= 2) return socket.emit('errorMsg', 'Bu oda dolu!');
+        
+        rooms[roomCode].players.push({ id: socket.id, name: username, score: 0, jokers: { freeze: 1, letter: 1, pass: 1 } });
+        socket.join(roomCode);
+        socket.emit('joined', { playerNumber: rooms[roomCode].players.length });
 
-    // Oyuncuya joker haklarını da ekliyoruz
-    rooms[roomCode].players.push({
-      id: socket.id,
-      name: username,
-      score: 0,
-      jokers: { freeze: 1, letter: 1, pass: 1 },
+        if (rooms[roomCode].players.length === 2) {
+            startGame(roomCode); // Oyunu başlatan fonksiyonu çağırıyoruz
+        }
     });
-    socket.join(roomCode);
-    socket.emit("joined", { playerNumber: rooms[roomCode].players.length });
 
-    if (rooms[roomCode].players.length === 2) {
-      const firstWord =
-        validNamesArray[Math.floor(Math.random() * validNamesArray.length)];
-      rooms[roomCode].usedNames.push(firstWord);
-      rooms[roomCode].currentLetter = firstWord.slice(-1);
-      rooms[roomCode].turn = 0;
-      rooms[roomCode].turnStartTime = Date.now();
+    // OYUNU BAŞLATMA VE SIFIRLAMA FONKSİYONU
+    function startGame(roomCode) {
+        const room = rooms[roomCode];
+        const firstWord = validNamesArray[Math.floor(Math.random() * validNamesArray.length)];
+        
+        room.usedNames = [firstWord];
+        room.currentLetter = firstWord.slice(-1);
+        room.turn = 0;
+        room.turnStartTime = Date.now();
 
-      io.to(roomCode).emit("gameStart", {
-        firstWord: firstWord,
-        currentLetter: rooms[roomCode].currentLetter,
-        players: rooms[roomCode].players,
-        turnIndex: rooms[roomCode].turn,
-      });
-    }
-  });
-
-  // KELİME HAMLESİ
-  socket.on("makeMove", (data) => {
-    const { roomCode, word } = data;
-    const room = rooms[roomCode];
-    if (!room) return;
-
-    const upperWord = word.toLocaleUpperCase("tr-TR");
-    const currentPlayer = room.players[room.turn];
-
-    if (upperWord.charAt(0) !== room.currentLetter)
-      return socket.emit(
-        "errorMsg",
-        `Kelime "${room.currentLetter}" ile başlamalı!`
-      );
-    if (!validNames.has(upperWord))
-      return socket.emit(
-        "errorMsg",
-        `Hata! "${upperWord}" veritabanında geçerli bir isim değil!`
-      );
-    if (room.usedNames.includes(upperWord))
-      return socket.emit("errorMsg", "Bu kelime zaten kullanıldı!");
-
-    const timeTaken = (Date.now() - room.turnStartTime) / 1000;
-    let timeLeft = 10 - timeTaken;
-    if (timeLeft < 0) timeLeft = 0;
-
-    const pointsEarned = 10 + Math.floor(timeLeft * 5);
-    currentPlayer.score += pointsEarned;
-
-    room.usedNames.push(upperWord);
-    room.currentLetter = upperWord.slice(-1);
-    room.turn = room.turn === 0 ? 1 : 0;
-    room.turnStartTime = Date.now();
-
-    io.to(roomCode).emit("moveMade", {
-      word: upperWord,
-      playerId: socket.id,
-      playerName: currentPlayer.name,
-      pointsEarned: pointsEarned,
-      nextLetter: room.currentLetter,
-      players: room.players,
-      nextTurnIndex: room.turn,
-    });
-  });
-
-  // JOKER KULLANIMI
-  socket.on("useJoker", (data) => {
-    const { roomCode, type } = data;
-    const room = rooms[roomCode];
-    if (!room) return;
-
-    const currentPlayer = room.players[room.turn];
-    if (currentPlayer.id !== socket.id || currentPlayer.jokers[type] <= 0)
-      return;
-
-    currentPlayer.jokers[type]--; // Jokeri eksilt
-
-    if (type === "freeze") {
-      room.turnStartTime = Date.now();
-      io.to(roomCode).emit("jokerEffect", {
-        type: "freeze",
-        playerName: currentPlayer.name,
-        letter: room.currentLetter,
-        nextTurnIndex: room.turn,
-      });
-    } else if (type === "letter") {
-      const lastWord = room.usedNames[room.usedNames.length - 1];
-      if (lastWord && lastWord.length >= 2) {
-        room.currentLetter = lastWord.charAt(lastWord.length - 2); // Sondan ikinci harf
-        io.to(roomCode).emit("jokerEffect", {
-          type: "letter",
-          playerName: currentPlayer.name,
-          letter: room.currentLetter,
-          nextTurnIndex: room.turn,
+        // Puan ve jokerleri sıfırla
+        room.players.forEach(p => {
+            p.score = 0;
+            p.jokers = { freeze: 1, letter: 1, pass: 1 };
         });
-      }
-    } else if (type === "pass") {
-      room.turn = room.turn === 0 ? 1 : 0; // Sırayı rakibe at
-      room.turnStartTime = Date.now();
-      io.to(roomCode).emit("jokerEffect", {
-        type: "pass",
-        playerName: currentPlayer.name,
-        letter: room.currentLetter,
-        nextTurnIndex: room.turn,
-      });
-    }
-  });
 
-  socket.on("timeUp", (roomCode) => {
-    if (rooms[roomCode]) {
-      io.to(roomCode).emit("gameOver", {
-        loserId: socket.id,
-        reason: "Süre doldu!",
-        players: rooms[roomCode].players,
-      });
-      delete rooms[roomCode];
+        io.to(roomCode).emit('gameStart', {
+            firstWord: firstWord, currentLetter: room.currentLetter, players: room.players, turnIndex: room.turn
+        });
     }
-  });
+
+    socket.on('makeMove', (data) => {
+        const { roomCode, word } = data;
+        const room = rooms[roomCode];
+        if (!room) return;
+        
+        const upperWord = word.toLocaleUpperCase('tr-TR');
+        const currentPlayer = room.players[room.turn];
+
+        if (upperWord.charAt(0) !== room.currentLetter) return socket.emit('errorMsg', `Kelime "${room.currentLetter}" ile başlamalı!`);
+        if (!validNames.has(upperWord)) return socket.emit('errorMsg', `Hata! "${upperWord}" veritabanında geçerli bir isim değil!`);
+        if (room.usedNames.includes(upperWord)) return socket.emit('errorMsg', 'Bu kelime zaten kullanıldı!');
+        
+        const timeTaken = (Date.now() - room.turnStartTime) / 1000;
+        let timeLeft = 10 - timeTaken;
+        if (timeLeft < 0) timeLeft = 0;
+        
+        const pointsEarned = 10 + Math.floor(timeLeft * 5);
+        currentPlayer.score += pointsEarned;
+
+        room.usedNames.push(upperWord);
+        room.currentLetter = upperWord.slice(-1);
+        room.turn = room.turn === 0 ? 1 : 0;
+        room.turnStartTime = Date.now();
+        
+        io.to(roomCode).emit('moveMade', {
+            word: upperWord, playerId: socket.id, playerName: currentPlayer.name, pointsEarned: pointsEarned, nextLetter: room.currentLetter, players: room.players, nextTurnIndex: room.turn
+        });
+    });
+
+    socket.on('useJoker', (data) => {
+        const { roomCode, type } = data;
+        const room = rooms[roomCode];
+        if (!room) return;
+        
+        const currentPlayer = room.players[room.turn];
+        if (currentPlayer.id !== socket.id || currentPlayer.jokers[type] <= 0) return;
+        
+        currentPlayer.jokers[type]--; 
+
+        if (type === 'freeze') {
+            room.turnStartTime = Date.now();
+            io.to(roomCode).emit('jokerEffect', { type: 'freeze', playerName: currentPlayer.name, letter: room.currentLetter, nextTurnIndex: room.turn });
+        } else if (type === 'letter') {
+            const lastWord = room.usedNames[room.usedNames.length - 1];
+            if (lastWord && lastWord.length >= 2) {
+                room.currentLetter = lastWord.charAt(lastWord.length - 2); 
+                io.to(roomCode).emit('jokerEffect', { type: 'letter', playerName: currentPlayer.name, letter: room.currentLetter, nextTurnIndex: room.turn });
+            }
+        } else if (type === 'pass') {
+            room.turn = room.turn === 0 ? 1 : 0; 
+            room.turnStartTime = Date.now();
+            io.to(roomCode).emit('jokerEffect', { type: 'pass', playerName: currentPlayer.name, letter: room.currentLetter, nextTurnIndex: room.turn });
+        }
+    });
+
+    // TEKRAR OYNA İSTEĞİ (Biri basınca ikisi için de oyunu baştan kurar)
+    socket.on('playAgain', (roomCode) => {
+        if (rooms[roomCode] && rooms[roomCode].players.length === 2) {
+            startGame(roomCode);
+        }
+    });
+
+    socket.on('timeUp', (roomCode) => {
+        if (rooms[roomCode]) {
+            io.to(roomCode).emit('gameOver', { loserId: socket.id, reason: 'Süre doldu!', players: rooms[roomCode].players });
+            // NOT: Tekrar oynanabilmesi için odayı silme komutu (delete rooms) buradan kaldırıldı.
+        }
+    });
+
+    socket.on('disconnect', () => {
+        for (let code in rooms) {
+            if (rooms[code].players.some(p => p.id === socket.id)) {
+                io.to(code).emit('gameOver', { loserId: socket.id, reason: 'Rakip oyundan çıktı!', players: rooms[code].players });
+                delete rooms[code]; // Biri tamamen çıkarsa oda silinir
+            }
+        }
+    });
 });
 
-const listener = http.listen(process.env.PORT || 3000, () => {
-  console.log("Sunucu çalışıyor!");
-});
+const listener = http.listen(process.env.PORT || 3000, () => { console.log("Sunucu çalışıyor!"); });
