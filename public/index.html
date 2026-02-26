@@ -10,8 +10,8 @@
         .app-container { width: 100%; max-width: 450px; height: 100vh; background-color: #e5ddd5; display: flex; flex-direction: column; position: relative; }
         
         #lobby { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; padding: 20px; background: #075e54; color: white; text-align: center; z-index: 20; position: absolute; width: 100%; height: 100%; }
-        #lobby input { padding: 15px; border-radius: 25px; border: none; font-size: 1.2rem; margin: 10px 0; width: 80%; text-align: center; outline: none; text-transform: uppercase; }
-        #lobby button { margin-top: 15px; padding: 15px 30px; border-radius: 25px; border: none; background: #25d366; color: white; font-size: 1.2rem; cursor: pointer; font-weight: bold; width: 80%; }
+        #lobby input, #lobby select { padding: 15px; border-radius: 25px; border: none; font-size: 1.1rem; margin: 10px 0; width: 85%; text-align: center; outline: none; text-transform: uppercase; font-weight: bold;}
+        #lobby button { margin-top: 15px; padding: 15px 30px; border-radius: 25px; border: none; background: #25d366; color: white; font-size: 1.2rem; cursor: pointer; font-weight: bold; width: 85%; }
         
         .header { background-color: #075e54; color: white; padding: 10px 15px; display: flex; flex-direction: column; align-items: center; }
         .scoreboard { display: flex; justify-content: space-between; width: 100%; font-size: 1.1rem; margin-bottom: 5px; background: rgba(0,0,0,0.2); padding: 5px 15px; border-radius: 15px;}
@@ -32,8 +32,8 @@
         .system-joker { background-color: #ff9800; color: white; align-self: center; font-size: 0.9rem; border-radius: 15px; padding: 5px 15px; text-align: center; font-weight: bold;}
         
         .joker-area { display: flex; justify-content: space-around; background: #e5ddd5; padding: 5px; border-top: 1px solid #ccc;}
-        .joker-btn { padding: 8px; border-radius: 10px; border: none; background: #3498db; color: white; font-weight: bold; cursor: pointer; flex: 1; margin: 0 5px; transition: 0.2s;}
-        .joker-btn:disabled { background: #95a5a6; opacity: 0.5; cursor: not-allowed;}
+        .joker-btn { padding: 8px; border-radius: 10px; border: none; background: #3498db; color: white; font-weight: bold; cursor: pointer; flex: 1; margin: 0 5px; transition: 0.2s; text-align: center;}
+        .joker-btn:disabled { background: #95a5a6; cursor: not-allowed; opacity: 0.8;}
         
         .input-area { background-color: #f0f0f0; padding: 10px; display: flex; gap: 10px; }
         .input-area input { flex: 1; padding: 12px 15px; border-radius: 25px; border: none; font-size: 1rem; outline: none; text-transform: uppercase; }
@@ -43,6 +43,7 @@
         #gameOverScreen h2 { font-size: 2.5rem; margin-bottom: 10px;}
         .final-scores { margin: 20px 0; font-size: 1.3rem; background: #333; padding: 15px; border-radius: 15px;}
         #gameOverScreen button { margin-top: 10px; padding: 10px 30px; background: #25d366; border: none; border-radius: 25px; color: white; font-size: 1.2rem; cursor: pointer; }
+        #playAgainStatus { display:none; color: #ffeb3b; margin-top: 10px; font-weight: bold; font-size: 1.1rem;}
     </style>
 </head>
 <body>
@@ -52,6 +53,10 @@
         <h1>İsim Zinciri 🔗</h1>
         <input type="text" id="usernameInput" placeholder="KULLANICI ADIN">
         <input type="text" id="roomInput" placeholder="ODA KODU">
+        <select id="gameModeInput">
+            <option value="classic">Klasik Mod (Son Harf)</option>
+            <option value="random">Rastgele Harf Modu</option>
+        </select>
         <button onclick="joinRoom()">ODAYA KATIL</button>
     </div>
 
@@ -81,7 +86,8 @@
         <h2 id="winnerTitle">Oyun Bitti!</h2>
         <p id="gameOverReason"></p>
         <div class="final-scores" id="finalScoresDiv"></div>
-        <button onclick="requestPlayAgain()">Tekrar Oyna</button>
+        <button id="playAgainBtn" onclick="requestPlayAgain()">Tekrar Oyna</button>
+        <p id="playAgainStatus">Rakibin onayı bekleniyor...</p>
     </div>
 </div>
 
@@ -91,6 +97,7 @@
     let myId = '', currentRoom = '', isMyTurn = false, myName = '';
     const timeLimit = 10;
     let timeLeft = timeLimit, timerInterval;
+    let cooldownIntervals = { freeze: null, letter: null, pass: null };
 
     let audioCtx;
     function initAudio() { if(!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
@@ -112,9 +119,10 @@
         initAudio(); 
         myName = document.getElementById('usernameInput').value.trim();
         const code = document.getElementById('roomInput').value.trim().toUpperCase();
+        const mode = document.getElementById('gameModeInput').value;
         if(!myName || !code) return alert("Eksik bilgi girdiniz!");
         currentRoom = code;
-        socket.emit('joinRoom', { roomCode: code, username: myName });
+        socket.emit('joinRoom', { roomCode: code, username: myName, mode: mode });
     }
 
     socket.on('connect', () => myId = socket.id);
@@ -124,22 +132,26 @@
         if(data.playerNumber === 1) addMsg("Oda kuruldu. Rakip bekleniyor...", "system");
     });
 
-    // OYUN BAŞLADIĞINDA VEYA TEKRAR BAŞLADIĞINDA ÇALIŞAN KOD
     socket.on('gameStart', (data) => {
-        document.getElementById('gameOverScreen').style.display = 'none'; // Bitiş ekranını gizle
+        document.getElementById('gameOverScreen').style.display = 'none';
+        document.getElementById('playAgainBtn').style.display = 'inline-block';
+        document.getElementById('playAgainStatus').style.display = 'none';
         document.getElementById('chatBox').innerHTML = '';
         
-        // Puanları sıfırla
         document.getElementById('myScoreText').innerText = `${myName}: 0`;
         const opp = data.players.find(p => p.id !== myId);
         if(opp) document.getElementById('oppScoreText').innerText = `${opp.name}: 0`;
 
-        // Joker butonlarını tekrar görünür yap
-        document.getElementById('btnFreeze').style.display = 'inline-block';
-        document.getElementById('btnLetter').style.display = 'inline-block';
-        document.getElementById('btnPass').style.display = 'inline-block';
+        // Jokerleri ve Cooldown'ları Sıfırla
+        ['freeze', 'letter', 'pass'].forEach(type => {
+            clearInterval(cooldownIntervals[type]);
+            cooldownIntervals[type] = null;
+            let btnId = type === 'freeze' ? 'btnFreeze' : type === 'letter' ? 'btnLetter' : 'btnPass';
+            document.getElementById(btnId).innerText = type === 'freeze' ? '❄️ Buz' : type === 'letter' ? '🔤 Harf' : '⏭️ Pas';
+        });
 
-        addMsg("Oyun Başladı!", "system");
+        const modName = data.mode === 'random' ? "Rastgele Harf Modu" : "Klasik Mod";
+        addMsg(`Oyun Başladı! (${modName})`, "system");
         addMsg(data.firstWord, 'system');
         handleTurn(data.players[data.turnIndex].id, data.currentLetter, data.players[data.turnIndex].name);
     });
@@ -151,12 +163,37 @@
     });
 
     function sendJoker(type) {
-        if(!isMyTurn) return;
+        if(!isMyTurn || cooldownIntervals[type] !== null) return;
         socket.emit('useJoker', { roomCode: currentRoom, type: type });
-        document.getElementById(type === 'freeze' ? 'btnFreeze' : type === 'letter' ? 'btnLetter' : 'btnPass').style.display = 'none'; 
+    }
+
+    // COOLDOWN (30s) GÖRSEL SİSTEMİ
+    function startCooldown(type) {
+        let btnId = type === 'freeze' ? 'btnFreeze' : type === 'letter' ? 'btnLetter' : 'btnPass';
+        let btn = document.getElementById(btnId);
+        let originalText = type === 'freeze' ? '❄️ Buz' : type === 'letter' ? '🔤 Harf' : '⏭️ Pas';
+        
+        btn.disabled = true;
+        let secondsLeft = 30;
+        btn.innerText = secondsLeft + "s";
+        
+        clearInterval(cooldownIntervals[type]);
+        cooldownIntervals[type] = setInterval(() => {
+            secondsLeft--;
+            if (secondsLeft <= 0) {
+                clearInterval(cooldownIntervals[type]);
+                cooldownIntervals[type] = null;
+                btn.innerText = originalText;
+                if(isMyTurn) btn.disabled = false; // Sıra bendeyse tekrar aktifleştir
+            } else {
+                btn.innerText = secondsLeft + "s";
+            }
+        }, 1000);
     }
 
     socket.on('jokerEffect', (data) => {
+        if (data.playerId === myId) startCooldown(data.type); // Sadece kullanan kişinin ekranında 30s başlar
+
         if(data.type === 'freeze') {
             addMsg(`❄️ ${data.playerName} süresini sıfırladı!`, "system-joker");
             if(isMyTurn) startTimer(); 
@@ -172,12 +209,16 @@
         }
     });
 
-    // TEKRAR OYNA BUTONUNA BASILINCA
+    // TEKRAR OYNA İSTEĞİ (Onay Sistemi)
     function requestPlayAgain() {
-        socket.emit('playAgain', currentRoom);
-        document.getElementById('gameOverScreen').style.display = 'none';
-        addMsg("Yeni oyun kuruluyor...", "system");
+        socket.emit('playAgainVote', currentRoom);
+        document.getElementById('playAgainBtn').style.display = 'none';
+        document.getElementById('playAgainStatus').style.display = 'block';
     }
+
+    socket.on('opponentVotedPlayAgain', () => {
+        addMsg("Rakibin tekrar oynamak istiyor! Kabul etmek için Tekrar Oyna'ya bas.", "system-joker");
+    });
 
     socket.on('errorMsg', msg => alert(msg));
     socket.on('gameOver', data => {
@@ -186,9 +227,11 @@
         document.getElementById('gameOverReason').innerText = data.reason;
         
         if (data.reason === 'Rakip oyundan çıktı!') {
-            document.querySelector('#gameOverScreen button').setAttribute('onclick', 'location.reload()'); // Rakip çıktıysa sayfayı yenilemek zorundayız
+            document.getElementById('playAgainBtn').setAttribute('onclick', 'location.reload()');
+            document.getElementById('playAgainBtn').innerText = "Lobiye Dön";
         } else {
-            document.querySelector('#gameOverScreen button').setAttribute('onclick', 'requestPlayAgain()'); // Normal bitişte tekrar oyna
+            document.getElementById('playAgainBtn').setAttribute('onclick', 'requestPlayAgain()');
+            document.getElementById('playAgainBtn').innerText = "Tekrar Oyna";
         }
 
         document.getElementById('winnerTitle').innerText = data.loserId === myId ? "Elendin! 😢" : "Kazandın! 🏆";
@@ -203,7 +246,11 @@
         const input = document.getElementById('nameInput');
         const btn = document.getElementById('sendBtn');
         
-        document.querySelectorAll('.joker-btn').forEach(b => b.disabled = !isMyTurn || b.style.display === 'none');
+        // Sadece sıra sendeyse ve 30 saniye cooldown dolmuşsa butonları aktif et
+        document.querySelectorAll('.joker-btn').forEach(b => {
+            const type = b.id === 'btnFreeze' ? 'freeze' : b.id === 'btnLetter' ? 'letter' : 'pass';
+            b.disabled = !isMyTurn || cooldownIntervals[type] !== null;
+        });
 
         if (isMyTurn) {
             turnText.innerText = `Sıra Sende! (${letter} ile başla)`; turnText.style.color = "#25d366";
@@ -217,6 +264,7 @@
     }
 
     function startTimer() {
+        clearInterval(timerInterval); // İşte gizli kronometreyi (bug'ı) yok eden satır!
         timeLeft = timeLimit;
         updateTimerUI();
         timerInterval = setInterval(() => {
