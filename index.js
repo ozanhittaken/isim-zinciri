@@ -5,6 +5,7 @@ const io = require('socket.io')(http);
 
 app.use(express.static('public'));
 
+// İsim listeni aynen buraya bırakıyorum
 const validNamesArray = [
     "ABBAS", "ABDULAZİZ", "ABDULKADİR", "ABDULLAH", "ABDULMELİK", "ABDULSAMET", "ABDULSELAM", "ABDURRAHMAN", "ABDÜLSAMET", "ADEM", "ADİL", "ADNAN", "AHMAD", "AHMET", "AKIN", "AKSEL", "ALAADDİN", "ALEV", "ALEVTİNA", "ALİ", "ALİŞAN", "ALPER", "ALPEREN", "ANDAÇ", "ANIL", "ARDA", "ARİF", "ARMAN", "ARZU", "ASENA", "ASIM", "ASLI", "ASLIHAN", "ASLAN", "ASUMAN", "ATAKAN", "ATİLLA", "AYBEGÜM", "AYBÜKE", "AYCAN", "AYDEMİR", "AYDIN", "AYDOĞAN", "AYHAN", "AYKAN", "AYKUT", "AYLA", "AYLİA", "AYLİN", "AYSU", "AYSUN", "AYŞE", "AYŞEGÜL", "AYŞEN", "AYŞENUR", "AYTAÇ", "AZİZ",
     "BAHADIR", "BAHRİ", "BAKİ", "BARAN", "BARIŞ", "BAŞAK", "BATUHAN", "BAVER", "BAYRAM", "BEDRİ", "BEDREDDİN", "BEGÜM", "BELGİN", "BELMA", "BENGÜ", "BENGÜHAN", "BERAAT", "BERAY", "BERÇEM", "BERFİN", "BERKER", "BERNA", "BERRİN", "BESTE", "BETÜL", "BEYZA", "BİLAL", "BİLGE", "BİLGİ", "BİLGİN", "BİNNUR", "BİRGÜL", "BİROL", "BİRSEN", "BİŞAR", "BORA", "BUĞRA", "BULUT", "BURAK", "BURCU", "BURÇİN", "BURHAN", "BURHANETTİN", "BÜLENT", "BÜNYAMİN", "BÜŞRA",
@@ -38,37 +39,49 @@ const rooms = {};
 
 io.on('connection', (socket) => {
     socket.on('joinRoom', (data) => {
-        const { roomCode, username } = data;
-        if (!rooms[roomCode]) rooms[roomCode] = { players: [], usedNames: [], currentLetter: '', turn: 0, turnStartTime: 0 };
+        const { roomCode, username, mode } = data;
+        
+        // Eğer oda yeni kuruluyorsa, modu odayı kuran belirler
+        if (!rooms[roomCode]) {
+            rooms[roomCode] = { players: [], usedNames: [], currentLetter: '', turn: 0, turnStartTime: 0, mode: mode || 'classic', playAgainVotes: new Set() };
+        }
+        
         if (rooms[roomCode].players.length >= 2) return socket.emit('errorMsg', 'Bu oda dolu!');
         
-        rooms[roomCode].players.push({ id: socket.id, name: username, score: 0, jokers: { freeze: 1, letter: 1, pass: 1 } });
+        // jokerCooldowns: 0 demek henüz cooldown yok demek (Kullanılabilir).
+        rooms[roomCode].players.push({ id: socket.id, name: username, score: 0, jokerCooldowns: { freeze: 0, letter: 0, pass: 0 } });
         socket.join(roomCode);
         socket.emit('joined', { playerNumber: rooms[roomCode].players.length });
 
         if (rooms[roomCode].players.length === 2) {
-            startGame(roomCode); // Oyunu başlatan fonksiyonu çağırıyoruz
+            startGame(roomCode);
         }
     });
 
-    // OYUNU BAŞLATMA VE SIFIRLAMA FONKSİYONU
     function startGame(roomCode) {
         const room = rooms[roomCode];
         const firstWord = validNamesArray[Math.floor(Math.random() * validNamesArray.length)];
         
         room.usedNames = [firstWord];
-        room.currentLetter = firstWord.slice(-1);
         room.turn = 0;
         room.turnStartTime = Date.now();
+        room.playAgainVotes.clear(); // Yeni oyun başladığında onayları sıfırla
 
-        // Puan ve jokerleri sıfırla
+        // MOD KONTROLÜ: İlk harfi belirleme
+        if (room.mode === 'random') {
+            const validChars = firstWord.split('').filter(c => c !== 'J' && c !== 'Ğ');
+            room.currentLetter = validChars.length > 0 ? validChars[Math.floor(Math.random() * validChars.length)] : firstWord.slice(-1);
+        } else {
+            room.currentLetter = firstWord.slice(-1);
+        }
+
         room.players.forEach(p => {
             p.score = 0;
-            p.jokers = { freeze: 1, letter: 1, pass: 1 };
+            p.jokerCooldowns = { freeze: 0, letter: 0, pass: 0 };
         });
 
         io.to(roomCode).emit('gameStart', {
-            firstWord: firstWord, currentLetter: room.currentLetter, players: room.players, turnIndex: room.turn
+            firstWord: firstWord, currentLetter: room.currentLetter, players: room.players, turnIndex: room.turn, mode: room.mode
         });
     }
 
@@ -92,9 +105,17 @@ io.on('connection', (socket) => {
         currentPlayer.score += pointsEarned;
 
         room.usedNames.push(upperWord);
-        room.currentLetter = upperWord.slice(-1);
+        
+        // MOD KONTROLÜ: Sonraki Harfi Belirleme
+        if (room.mode === 'random') {
+            const validChars = upperWord.split('').filter(c => c !== 'J' && c !== 'Ğ');
+            room.currentLetter = validChars.length > 0 ? validChars[Math.floor(Math.random() * validChars.length)] : upperWord.slice(-1);
+        } else {
+            room.currentLetter = upperWord.slice(-1);
+        }
+
         room.turn = room.turn === 0 ? 1 : 0;
-        room.turnStartTime = Date.now();
+        room.turnStartTime = Date.now(); // Sıra geçtiğinde zamanı kusursuz sıfırla
         
         io.to(roomCode).emit('moveMade', {
             word: upperWord, playerId: socket.id, playerName: currentPlayer.name, pointsEarned: pointsEarned, nextLetter: room.currentLetter, players: room.players, nextTurnIndex: room.turn
@@ -107,37 +128,52 @@ io.on('connection', (socket) => {
         if (!room) return;
         
         const currentPlayer = room.players[room.turn];
-        if (currentPlayer.id !== socket.id || currentPlayer.jokers[type] <= 0) return;
+        if (currentPlayer.id !== socket.id) return;
         
-        currentPlayer.jokers[type]--; 
+        const now = Date.now();
+        if (currentPlayer.jokerCooldowns[type] > now) return; // 30 saniye dolmamışsa engelle
+        
+        // Cooldown süresini 30 saniye sonrasına ayarla
+        currentPlayer.jokerCooldowns[type] = now + 30000; 
 
         if (type === 'freeze') {
             room.turnStartTime = Date.now();
-            io.to(roomCode).emit('jokerEffect', { type: 'freeze', playerName: currentPlayer.name, letter: room.currentLetter, nextTurnIndex: room.turn });
+            io.to(roomCode).emit('jokerEffect', { type: 'freeze', playerId: currentPlayer.id, playerName: currentPlayer.name, letter: room.currentLetter, nextTurnIndex: room.turn });
         } else if (type === 'letter') {
             const lastWord = room.usedNames[room.usedNames.length - 1];
             if (lastWord && lastWord.length >= 2) {
-                room.currentLetter = lastWord.charAt(lastWord.length - 2); 
-                io.to(roomCode).emit('jokerEffect', { type: 'letter', playerName: currentPlayer.name, letter: room.currentLetter, nextTurnIndex: room.turn });
+                // Eğer mod random ise ve harf jokeri kullanılırsa başka bir rastgele harf verelim
+                if (room.mode === 'random') {
+                    const validChars = lastWord.split('').filter(c => c !== 'J' && c !== 'Ğ' && c !== room.currentLetter);
+                    room.currentLetter = validChars.length > 0 ? validChars[Math.floor(Math.random() * validChars.length)] : lastWord.charAt(lastWord.length - 2);
+                } else {
+                    room.currentLetter = lastWord.charAt(lastWord.length - 2); 
+                }
+                io.to(roomCode).emit('jokerEffect', { type: 'letter', playerId: currentPlayer.id, playerName: currentPlayer.name, letter: room.currentLetter, nextTurnIndex: room.turn });
             }
         } else if (type === 'pass') {
             room.turn = room.turn === 0 ? 1 : 0; 
             room.turnStartTime = Date.now();
-            io.to(roomCode).emit('jokerEffect', { type: 'pass', playerName: currentPlayer.name, letter: room.currentLetter, nextTurnIndex: room.turn });
+            io.to(roomCode).emit('jokerEffect', { type: 'pass', playerId: currentPlayer.id, playerName: currentPlayer.name, letter: room.currentLetter, nextTurnIndex: room.turn });
         }
     });
 
-    // TEKRAR OYNA İSTEĞİ (Biri basınca ikisi için de oyunu baştan kurar)
-    socket.on('playAgain', (roomCode) => {
-        if (rooms[roomCode] && rooms[roomCode].players.length === 2) {
-            startGame(roomCode);
+    // ÇİFT TARAFLI TEKRAR OYNA SİSTEMİ
+    socket.on('playAgainVote', (roomCode) => {
+        const room = rooms[roomCode];
+        if (room && room.players.length === 2) {
+            room.playAgainVotes.add(socket.id);
+            if (room.playAgainVotes.size === 2) {
+                startGame(roomCode); // İkisi de onaylarsa başlat
+            } else {
+                socket.to(roomCode).emit('opponentVotedPlayAgain'); // Diğerine haber ver
+            }
         }
     });
 
     socket.on('timeUp', (roomCode) => {
         if (rooms[roomCode]) {
             io.to(roomCode).emit('gameOver', { loserId: socket.id, reason: 'Süre doldu!', players: rooms[roomCode].players });
-            // NOT: Tekrar oynanabilmesi için odayı silme komutu (delete rooms) buradan kaldırıldı.
         }
     });
 
@@ -145,7 +181,7 @@ io.on('connection', (socket) => {
         for (let code in rooms) {
             if (rooms[code].players.some(p => p.id === socket.id)) {
                 io.to(code).emit('gameOver', { loserId: socket.id, reason: 'Rakip oyundan çıktı!', players: rooms[code].players });
-                delete rooms[code]; // Biri tamamen çıkarsa oda silinir
+                delete rooms[code]; 
             }
         }
     });
